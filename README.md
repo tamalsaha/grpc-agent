@@ -11,7 +11,7 @@ go install github.com/tamalsaha/grpc-agent@latest
 Or build from source:
 
 ```bash
-go build -o grpc-agent
+make all
 ```
 
 ## Usage
@@ -21,7 +21,7 @@ go build -o grpc-agent
 Run the gRPC server that clients connect to:
 
 ```bash
-grpc-agent init -p 50051
+./grpc-agent init -p 50051
 ```
 
 ### Join as Client (join)
@@ -29,23 +29,43 @@ grpc-agent init -p 50051
 Connect a client to the server:
 
 ```bash
-grpc-agent join -s localhost:50051 -n my-client
+./grpc-agent join -s localhost:50051 -n my-client
 ```
 
-### Execute Remote Command (remote_exec)
+### Execute Command (exec)
 
-Execute a command on a remote client:
+Execute commands locally or remotely using plugins:
 
 ```bash
-grpc-agent remote_exec my-client "hostname"
-grpc-agent remote_exec my-client "ls -la /tmp"
+# Execute locally
+./grpc-agent exec local hostname
+./grpc-agent exec local ls -la
+
+# Execute remotely
+./grpc-agent exec remote my-client hostname
+./grpc-agent exec remote my-client "ls -la /tmp"
 ```
 
 ## Commands
 
-- `init` - Start the bi-directional streaming gRPC server
-- `join` - Start a gRPC client that listens for commands from the server
-- `remote_exec` - Execute a command on a remote client
+| Command | Description |
+|---------|-------------|
+| `init` | Start the bi-directional streaming gRPC server |
+| `join` | Start a gRPC client that listens for commands |
+| `exec local` | Execute a command locally using plugin |
+| `exec remote` | Execute a command on a remote client via gRPC server |
+| `remote_exec` | Execute a command on a remote client (legacy) |
+
+## Plugins
+
+Two plugins are provided in the `plugins/` directory:
+
+- `local_exec_plugin` - Executes commands locally on the host
+- `remote_exec_plugin` - Executes commands on remote clients via the gRPC server
+
+Environment variables for remote_exec_plugin:
+- `GRPC_AGENT_SERVER_ADDR` - Server address (default: localhost:50051)
+- `GRPC_AGENT_CLIENT_NAME` - Client name for identification
 
 ## Protocol
 
@@ -63,16 +83,30 @@ Each `AgentMessage` contains:
 - `output` - Command output
 - `is_response` - Whether this is a response message
 
-## Build Proto
+## Build
 
 ```bash
+# Build main binary
+make build
+
+# Build plugins
+make build-plugins
+
+# Build everything
+make all
+
+# Clean
+make clean
+```
+
+## Generate Proto
+
+```bash
+# Using protoc
 protoc --go_out=proto/gen --go_opt=paths=source_relative \
        --go-grpc_out=proto/gen --go-grpc_opt=paths=source_relative \
        proto/agent.proto
-```
 
-Or with buf:
-
-```bash
+# Using buf
 buf generate
 ```

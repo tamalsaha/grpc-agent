@@ -15,11 +15,6 @@ import (
 	"grpc-agent/proto/gen/proto"
 )
 
-var (
-	serverAddr string
-	clientName string
-)
-
 var joinCmdObj = &cobra.Command{
 	Use:   "join",
 	Short: "Start a grpc client that listens for commands from the server",

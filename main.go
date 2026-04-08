@@ -20,6 +20,7 @@ func main() {
 	rootCmd.AddCommand(cmd.InitCmd())
 	rootCmd.AddCommand(cmd.JoinCmd())
 	rootCmd.AddCommand(cmd.RemoteExecCmd())
+	rootCmd.AddCommand(cmd.ExecCmd())
 
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)
