@@ -15,7 +15,7 @@ The same plugin interface is used for both local and remote execution paths.
 ```mermaid
 flowchart LR
      subgraph Host[Host Processes]
-          EX[exec command\nmode: local | remote]
+          EX[exec command\nmode: local or remote]
           INI[init server\nAgentService.Connect]
           JOI[join client\nlong-lived stream]
      end
