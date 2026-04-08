@@ -67,6 +67,21 @@ flowchart LR
      PM -. shared by .- RP
 ```
 
+### Local Execution Sequence
+
+```mermaid
+sequenceDiagram
+     autonumber
+     participant O as Operator exec local
+     participant EX as exec command
+     participant LP as local_exec_plugin
+
+     O->>EX: run local command
+     EX->>LP: dispense executor and execute command
+     LP-->>EX: output or error
+     EX-->>O: print command result
+```
+
 ### Remote Execution Sequence
 
 ```mermaid
