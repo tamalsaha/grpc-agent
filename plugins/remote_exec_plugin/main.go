@@ -6,11 +6,12 @@ import (
 	"log"
 	"os"
 
+	"grpc-agent/proto/gen/proto"
+	"grpc-agent/shared"
+
 	"github.com/hashicorp/go-plugin"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
-	"grpc-agent/proto/gen/proto"
-	"grpc-agent/shared"
 )
 
 type RemoteExecutor struct{}

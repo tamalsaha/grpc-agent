@@ -10,6 +10,85 @@ grpc-agent has three runtime roles:
 
 The same plugin interface is used for both local and remote execution paths.
 
+## Architecture Diagram
+
+```mermaid
+flowchart LR
+     subgraph Host[Host Processes]
+          EX[exec command\nmode: local | remote]
+          INI[init server\nAgentService.Connect]
+          JOI[join client\nlong-lived stream]
+     end
+
+     subgraph Shared[Shared Plugin Contract]
+          HS[Handshake\nMagicCookie: GRPC_AGENT_PLUGIN]
+          IF[Executor Interface\nExecute(ctx, command)]
+          PM[Plugin Key\nexecutor]
+     end
+
+     subgraph Plugins[Plugin Binaries]
+          LP[local_exec_plugin\nServe ExecutorPlugin\nexecutes bash -lc]
+          RP[remote_exec_plugin\nServe ExecutorPlugin\nforwards to target client]
+     end
+
+     subgraph Transport[Transports]
+          GOPLUG[go-plugin net/rpc]
+          GRPC[gRPC bidi stream\nAgentMessage]
+     end
+
+     EX -->|dispense executor| GOPLUG
+     GOPLUG --> LP
+     GOPLUG --> RP
+
+     INI -->|dispense executor for server-local execution| GOPLUG
+     JOI -->|dispense executor for received commands| GOPLUG
+
+     EX -->|remote mode Execute()| RP
+     RP -->|register + send target command| GRPC
+     GRPC --> INI
+     INI -->|forward command| GRPC
+     GRPC --> JOI
+     JOI -->|Execute() via local plugin| LP
+     JOI -->|response message| GRPC
+     GRPC --> INI
+     INI -->|response| GRPC
+     GRPC --> RP
+     RP -->|return output| EX
+
+     EX -->|local mode Execute()| LP
+     LP -->|output| EX
+
+     HS --- IF
+     IF --- PM
+     PM -. shared by .- EX
+     PM -. shared by .- INI
+     PM -. shared by .- JOI
+     PM -. shared by .- LP
+     PM -. shared by .- RP
+```
+
+### Remote Execution Sequence
+
+```mermaid
+sequenceDiagram
+     autonumber
+     participant O as Operator (exec remote)
+     participant RP as remote_exec_plugin
+     participant S as init server
+     participant C as target join client
+     participant LP as local_exec_plugin
+
+     O->>RP: Execute(command, targetClient)
+     RP->>S: Connect stream + register caller
+     RP->>S: AgentMessage{target_name=targetClient, command}
+     S->>C: Forward AgentMessage{client_name=caller, command}
+     C->>LP: Execute(command)
+     LP-->>C: output/error
+     C-->>S: AgentMessage{is_response=true, target_name=caller, output}
+     S-->>RP: Correlated response for caller
+     RP-->>O: Execute() result
+```
+
 ## How It Works
 
 ### High-level components
@@ -88,6 +167,7 @@ This ensures `local_exec_plugin` and `remote_exec_plugin` present the exact same
 - Connects to server and registers a stable client name.
 - Keeps stream open to receive commands.
 - Uses `local_exec_plugin` to execute received commands.
+- Does not execute shell commands directly in `cmd/join.go`; all command execution is delegated through the plugin interface.
 - Sends response message including requester correlation via `target_name`.
 
 ### `exec`
@@ -200,15 +280,15 @@ make clean
 ## Troubleshooting
 
 - Plugin handshake errors:
-     - Ensure host and plugin binaries are built from the same commit.
-     - Ensure `shared/executor.go` handshake constants match between host and plugin.
+  - Ensure host and plugin binaries are built from the same commit.
+  - Ensure `shared/executor.go` handshake constants match between host and plugin.
 - Remote mode hangs:
-     - Confirm target client is running `join` and is registered.
-     - Verify server/client names are unique and stable.
-     - Verify `--server` points to the same server for `init`, `join`, and `exec`.
+  - Confirm target client is running `join` and is registered.
+  - Verify server/client names are unique and stable.
+  - Verify `--server` points to the same server for `init`, `join`, and `exec`.
 - Plugin not found:
-     - Build plugins with `make build-plugins`.
-     - Keep expected binary paths under `plugins/<name>/<name>`.
+  - Build plugins with `make build-plugins`.
+  - Keep expected binary paths under `plugins/<name>/<name>`.
 
 ## Generate Proto
 

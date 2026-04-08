@@ -8,9 +8,10 @@ import (
 	"path/filepath"
 	"strings"
 
+	"grpc-agent/shared"
+
 	"github.com/hashicorp/go-plugin"
 	"github.com/spf13/cobra"
-	"grpc-agent/shared"
 )
 
 var serverAddr string

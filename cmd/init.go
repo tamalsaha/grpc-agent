@@ -11,12 +11,13 @@ import (
 	"path/filepath"
 	"sync"
 
+	"grpc-agent/proto/gen/proto"
+	"grpc-agent/shared"
+
 	"github.com/hashicorp/go-plugin"
 	"github.com/spf13/cobra"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/peer"
-	"grpc-agent/proto/gen/proto"
-	"grpc-agent/shared"
 )
 
 var (

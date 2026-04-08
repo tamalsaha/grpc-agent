@@ -10,12 +10,13 @@ import (
 	"os/signal"
 	"path/filepath"
 
+	"grpc-agent/proto/gen/proto"
+	"grpc-agent/shared"
+
 	"github.com/hashicorp/go-plugin"
 	"github.com/spf13/cobra"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
-	"grpc-agent/proto/gen/proto"
-	"grpc-agent/shared"
 )
 
 var joinCmdObj = &cobra.Command{

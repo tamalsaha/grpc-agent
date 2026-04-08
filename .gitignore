@@ -30,3 +30,11 @@ go.work.sum
 # Editor/IDE
 # .idea/
 # .vscode/
+
+# Project build artifacts (no extension binaries)
+/grpc-agent
+/plugins/local_exec_plugin/local_exec_plugin
+/plugins/remote_exec_plugin/remote_exec_plugin
+
+# Runtime logs
+*.log

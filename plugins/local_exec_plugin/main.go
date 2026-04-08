@@ -5,8 +5,9 @@ import (
 	"os"
 	"os/exec"
 
-	"github.com/hashicorp/go-plugin"
 	"grpc-agent/shared"
+
+	"github.com/hashicorp/go-plugin"
 )
 
 // LocalExecutor is a simple executor that runs commands locally.
