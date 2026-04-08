@@ -55,7 +55,7 @@ flowchart LR
      GRPC --> RP
      RP -->|return output| EX
 
-     EX -->|local mode Execute()| LP
+     EX -->|local mode execute| LP
      LP -->|output| EX
 
      HS --- IF
@@ -79,13 +79,13 @@ sequenceDiagram
      participant LP as local_exec_plugin
 
      O->>RP: execute command for target client
-     RP->>S: Connect stream + register caller
-     RP->>S: AgentMessage{target_name=targetClient, command}
-     S->>C: Forward AgentMessage{client_name=caller, command}
+     RP->>S: connect stream and register caller
+     RP->>S: send command message to target
+     S->>C: forward command message
      C->>LP: execute command
-     LP-->>C: output/error
-     C-->>S: AgentMessage{is_response=true, target_name=caller, output}
-     S-->>RP: Correlated response for caller
+     LP-->>C: output or error
+     C-->>S: send response message to requester
+     S-->>RP: return correlated response
      RP-->>O: execution result
 ```
 
