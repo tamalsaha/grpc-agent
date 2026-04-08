@@ -22,7 +22,7 @@ flowchart LR
 
      subgraph Shared[Shared Plugin Contract]
           HS[Handshake\nMagicCookie: GRPC_AGENT_PLUGIN]
-          IF[Executor Interface\nExecute(ctx, command)]
+          IF[Executor Interface\nExecute command]
           PM[Plugin Key\nexecutor]
      end
 
@@ -43,12 +43,12 @@ flowchart LR
      INI -->|dispense executor for server-local execution| GOPLUG
      JOI -->|dispense executor for received commands| GOPLUG
 
-     EX -->|remote mode Execute()| RP
+     EX -->|remote mode execute| RP
      RP -->|register + send target command| GRPC
      GRPC --> INI
      INI -->|forward command| GRPC
      GRPC --> JOI
-     JOI -->|Execute() via local plugin| LP
+     JOI -->|execute via local plugin| LP
      JOI -->|response message| GRPC
      GRPC --> INI
      INI -->|response| GRPC
@@ -72,21 +72,21 @@ flowchart LR
 ```mermaid
 sequenceDiagram
      autonumber
-     participant O as Operator (exec remote)
+     participant O as Operator exec remote
      participant RP as remote_exec_plugin
      participant S as init server
      participant C as target join client
      participant LP as local_exec_plugin
 
-     O->>RP: Execute(command, targetClient)
+     O->>RP: execute command for target client
      RP->>S: Connect stream + register caller
      RP->>S: AgentMessage{target_name=targetClient, command}
      S->>C: Forward AgentMessage{client_name=caller, command}
-     C->>LP: Execute(command)
+     C->>LP: execute command
      LP-->>C: output/error
      C-->>S: AgentMessage{is_response=true, target_name=caller, output}
      S-->>RP: Correlated response for caller
-     RP-->>O: Execute() result
+     RP-->>O: execution result
 ```
 
 ## How It Works
