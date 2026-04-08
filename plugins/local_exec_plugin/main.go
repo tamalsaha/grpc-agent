@@ -1,24 +1,33 @@
 package main
 
 import (
-	"fmt"
+	"context"
 	"os"
 	"os/exec"
+
+	"github.com/hashicorp/go-plugin"
+	"grpc-agent/shared"
 )
 
-func main() {
-	args := os.Args[1:]
-	if len(args) == 0 {
-		fmt.Fprintf(os.Stderr, "Usage: local_exec_plugin <command> [args...]\n")
-		os.Exit(1)
-	}
+// LocalExecutor is a simple executor that runs commands locally.
+type LocalExecutor struct{}
 
-	cmd := exec.Command(args[0], args[1:]...)
+// Execute runs a command locally and returns the output.
+func (e *LocalExecutor) Execute(ctx context.Context, command string) (string, error) {
+	cmd := exec.CommandContext(ctx, "bash", "-lc", command)
 	cmd.Env = os.Environ()
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n%s", err, string(output))
-		os.Exit(1)
+		return string(output), err
 	}
-	fmt.Print(string(output))
+	return string(output), nil
+}
+
+func main() {
+	plugin.Serve(&plugin.ServeConfig{
+		HandshakeConfig: shared.HandshakeConfig,
+		Plugins: map[string]plugin.Plugin{
+			shared.PluginExecutor: &shared.ExecutorPlugin{Impl: &LocalExecutor{}},
+		},
+	})
 }

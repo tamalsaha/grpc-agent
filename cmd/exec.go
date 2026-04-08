@@ -1,97 +1,93 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"strings"
 
+	"github.com/hashicorp/go-plugin"
 	"github.com/spf13/cobra"
+	"grpc-agent/shared"
 )
 
 var serverAddr string
 var clientName string
 
 var execCmd = &cobra.Command{
-	Use:   "exec",
-	Short: "Execute a command locally or remotely",
-	Run: func(cmd *cobra.Command, args []string) {
-		cmd.Help()
-		os.Exit(1)
-	},
-}
-
-var localCmd = &cobra.Command{
-	Use:                "local [command...]",
-	Short:              "Execute a command locally",
-	Args:               cobra.MinimumNArgs(1),
-	DisableFlagParsing: true,
-	Run: func(cmd *cobra.Command, args []string) {
-		executeLocal(args)
-	},
-}
-
-var remoteCmd = &cobra.Command{
-	Use:                "remote [client-name] [command...]",
-	Short:              "Execute a command on a remote client",
-	Args:               cobra.MinimumNArgs(2),
-	DisableFlagParsing: true,
-	Run: func(cmd *cobra.Command, args []string) {
-		executeRemote(args)
-	},
-}
-
-func executeLocal(args []string) {
-	pluginPath := findPlugin("local_exec_plugin")
-	if pluginPath == "" {
-		fmt.Println("Error: local_exec_plugin not found")
-		os.Exit(1)
-	}
-
-	cmd := exec.Command(pluginPath, args...)
-	cmd.Env = os.Environ()
-
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		fmt.Printf("Error: %v\n%s", err, string(output))
-		os.Exit(1)
-	}
-	fmt.Print(string(output))
-}
-
-func executeRemote(args []string) {
-	if len(args) < 2 {
-		fmt.Println("Usage: grpc-agent exec remote <client-name> <command> [args...]")
-		os.Exit(1)
-	}
-
-	pluginPath := findPlugin("remote_exec_plugin")
-	if pluginPath == "" {
-		fmt.Println("Error: remote_exec_plugin not found")
-		os.Exit(1)
-	}
-
-	targetClient := args[0]
-	command := ""
-	for i, arg := range args[1:] {
-		if i > 0 {
-			command += " "
+	Use:   "exec [local|remote] ...",
+	Short: "Execute a command locally or on a remote client via plugins",
+	Args:  cobra.ArbitraryArgs,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if len(args) < 2 {
+			return fmt.Errorf("usage: grpc-agent exec local <command...> OR grpc-agent exec remote <client-name> <command...>")
 		}
-		command += arg
+
+		mode := args[0]
+		switch mode {
+		case "local":
+			return executeWithPlugin(cmd.Context(), "local_exec_plugin", "", args[1:])
+		case "remote":
+			if len(args) < 3 {
+				return fmt.Errorf("usage: grpc-agent exec remote <client-name> <command...>")
+			}
+			targetClient := args[1]
+			return executeWithPlugin(cmd.Context(), "remote_exec_plugin", targetClient, args[2:])
+		default:
+			return fmt.Errorf("invalid mode %q: use local or remote", mode)
+		}
+	},
+}
+
+func executeWithPlugin(ctx context.Context, pluginName, targetClient string, commandArgs []string) error {
+	if len(commandArgs) == 0 {
+		return fmt.Errorf("command is required")
 	}
 
-	cmd := exec.Command(pluginPath)
-	cmd.Env = append(os.Environ(),
+	pluginPath := findPlugin(pluginName)
+	if pluginPath == "" {
+		return fmt.Errorf("plugin %s not found", pluginName)
+	}
+
+	pluginCmd := exec.Command(pluginPath)
+	pluginCmd.Env = append(os.Environ(),
 		"GRPC_AGENT_SERVER_ADDR="+serverAddr,
 		"GRPC_AGENT_CLIENT_NAME="+clientName,
 	)
-	cmd.Args = []string{targetClient, command}
-
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		fmt.Printf("Error: %v\n%s", err, string(output))
-		os.Exit(1)
+	if targetClient != "" {
+		pluginCmd.Env = append(pluginCmd.Env, "GRPC_AGENT_TARGET_CLIENT="+targetClient)
 	}
-	fmt.Print(string(output))
+
+	client := plugin.NewClient(&plugin.ClientConfig{
+		HandshakeConfig: shared.HandshakeConfig,
+		Plugins:         shared.PluginMap,
+		Cmd:             pluginCmd,
+	})
+	defer client.Kill()
+
+	rpcClient, err := client.Client()
+	if err != nil {
+		return fmt.Errorf("failed to start plugin %s: %w", pluginName, err)
+	}
+
+	raw, err := rpcClient.Dispense(shared.PluginExecutor)
+	if err != nil {
+		return fmt.Errorf("failed to dispense plugin %s: %w", pluginName, err)
+	}
+
+	executor := raw.(shared.Executor)
+	command := strings.Join(commandArgs, " ")
+	output, err := executor.Execute(ctx, command)
+	if output != "" {
+		fmt.Print(output)
+	}
+	if err != nil {
+		return fmt.Errorf("command execution failed: %w", err)
+	}
+
+	return nil
 }
 
 func findPlugin(name string) string {
@@ -100,11 +96,10 @@ func findPlugin(name string) string {
 		return ""
 	}
 
-	dir := execPath[:len(execPath)-len("grpc-agent")]
-
+	execDir := filepath.Dir(execPath)
 	paths := []string{
-		dir + name,
-		dir + "plugins/" + name + "/" + name,
+		filepath.Join(execDir, "plugins", name, name),
+		filepath.Join(execDir, name),
 	}
 
 	for _, path := range paths {
@@ -117,14 +112,10 @@ func findPlugin(name string) string {
 }
 
 func ExecCmd() *cobra.Command {
-	execCmd.AddCommand(localCmd)
-	execCmd.AddCommand(remoteCmd)
 	return execCmd
 }
 
 func init() {
-	localCmd.Flags().StringVarP(&serverAddr, "server", "s", "localhost:50051", "Server address")
-	localCmd.Flags().StringVarP(&clientName, "name", "n", getHostname(), "Client name")
-	remoteCmd.Flags().StringVarP(&serverAddr, "server", "s", "localhost:50051", "Server address")
-	remoteCmd.Flags().StringVarP(&clientName, "name", "n", getHostname(), "Client name")
+	execCmd.Flags().StringVarP(&serverAddr, "server", "s", "localhost:50051", "Server address")
+	execCmd.Flags().StringVarP(&clientName, "name", "n", getHostname(), "Client name")
 }

@@ -1,4 +1,4 @@
-.PHONY: build build-plugins clean test proto lint install
+.PHONY: build build-plugins clean test integration-test proto lint install
 
 # Build the binary
 build:
@@ -19,6 +19,10 @@ clean:
 # Run tests
 test:
 	go test ./...
+
+# Run end-to-end integration test (server + client + local/remote exec)
+integration-test:
+	./scripts/integration_test.sh
 
 # Generate proto code
 proto:

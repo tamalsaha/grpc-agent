@@ -8,11 +8,14 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 
+	"github.com/hashicorp/go-plugin"
 	"github.com/spf13/cobra"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"grpc-agent/proto/gen/proto"
+	"grpc-agent/shared"
 )
 
 var joinCmdObj = &cobra.Command{
@@ -50,6 +53,26 @@ var joinCmdObj = &cobra.Command{
 		}
 		log.Printf("Server response: %s", resp.Output)
 
+		// Set up plugin client for local command execution
+		pluginClient := plugin.NewClient(&plugin.ClientConfig{
+			HandshakeConfig:  shared.HandshakeConfig,
+			Plugins:          shared.PluginMap,
+			Cmd:              exec.Command(resolveLocalExecPluginPath()),
+			AllowedProtocols: []plugin.Protocol{plugin.ProtocolNetRPC},
+		})
+		defer pluginClient.Kill()
+
+		rpcClient, err := pluginClient.Client()
+		if err != nil {
+			log.Fatalf("error creating plugin client: %v", err)
+		}
+
+		raw, err := rpcClient.Dispense(shared.PluginExecutor)
+		if err != nil {
+			log.Fatalf("error dispensing plugin: %v", err)
+		}
+		executor := raw.(shared.Executor)
+
 		go func() {
 			for {
 				msg, err := stream.Recv()
@@ -64,12 +87,17 @@ var joinCmdObj = &cobra.Command{
 
 				if msg.Command != "" && !msg.IsResponse {
 					log.Printf("Received command: %s", msg.Command)
-					output := executeLocalCommand(msg.Command)
+					// Execute the command locally using our plugin
+					output, err := executor.Execute(context.Background(), msg.Command)
 					resp := &proto.AgentMessage{
 						ClientName: clientName,
+						TargetName: msg.ClientName,
 						Command:    msg.Command,
 						Output:     output,
 						IsResponse: true,
+					}
+					if err != nil {
+						resp.Output = fmt.Sprintf("Error: %v", err)
 					}
 					stream.Send(resp)
 				}
@@ -81,69 +109,6 @@ var joinCmdObj = &cobra.Command{
 		<-sigCh
 		log.Println("Disconnected from server")
 	},
-}
-
-func executeLocalCommand(cmd string) string {
-	parts, err := shlex(cmd)
-	if err != nil {
-		return fmt.Sprintf("Error parsing command: %v", err)
-	}
-
-	c := exec.Command(parts[0], parts[1:]...)
-	c.Env = os.Environ()
-	output, err := c.CombinedOutput()
-	if err != nil {
-		return fmt.Sprintf("Error: %v\n%s", err, string(output))
-	}
-	return string(output)
-}
-
-func shlex(cmd string) ([]string, error) {
-	return splitWords(cmd), nil
-}
-
-func splitWords(s string) []string {
-	var words []string
-	var current []rune
-	inSingleQuote := false
-	inDoubleQuote := false
-
-	for _, r := range s {
-		switch r {
-		case '\'':
-			if !inSingleQuote {
-				inSingleQuote = true
-			} else {
-				inSingleQuote = false
-			}
-			current = append(current, r)
-		case '"':
-			if !inDoubleQuote {
-				inDoubleQuote = true
-			} else {
-				inDoubleQuote = false
-			}
-			current = append(current, r)
-		case ' ':
-			if inSingleQuote || inDoubleQuote {
-				current = append(current, r)
-			} else if len(current) > 0 {
-				words = append(words, string(current))
-				current = nil
-			}
-		default:
-			current = append(current, r)
-		}
-	}
-
-	if len(current) > 0 {
-		words = append(words, string(current))
-	}
-
-	if len(words) == 0 {
-		return []string{"sh", "-c", s}
-	}
-	return words
 }
 
 func JoinCmd() *cobra.Command {
@@ -161,4 +126,12 @@ func getHostname() string {
 		return "unknown"
 	}
 	return hostname
+}
+
+func resolveLocalExecPluginPath() string {
+	execPath, err := os.Executable()
+	if err != nil {
+		return "./plugins/local_exec_plugin/local_exec_plugin"
+	}
+	return filepath.Join(filepath.Dir(execPath), "plugins", "local_exec_plugin", "local_exec_plugin")
 }

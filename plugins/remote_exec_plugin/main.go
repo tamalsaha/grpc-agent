@@ -3,83 +3,87 @@ package main
 import (
 	"context"
 	"fmt"
+	"log"
 	"os"
 
+	"github.com/hashicorp/go-plugin"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"grpc-agent/proto/gen/proto"
+	"grpc-agent/shared"
 )
 
-func main() {
-	serverAddr := os.Getenv("GRPC_AGENT_SERVER_ADDR")
-	if serverAddr == "" {
-		serverAddr = "localhost:50051"
-	}
-	clientName := os.Getenv("GRPC_AGENT_CLIENT_NAME")
-	if clientName == "" {
-		clientName, _ = os.Hostname()
-	}
+type RemoteExecutor struct{}
 
-	args := os.Args[1:]
-	if len(args) < 2 {
-		fmt.Fprintf(os.Stderr, "Usage: remote_exec_plugin <client-name> <command> [args...]\n")
-		os.Exit(1)
-	}
-
-	targetClient := args[0]
-	command := ""
-	for i, arg := range args[1:] {
-		if i > 0 {
-			command += " "
-		}
-		command += arg
+func (e *RemoteExecutor) Execute(ctx context.Context, command string) (string, error) {
+	serverAddr := getenvOrDefault("GRPC_AGENT_SERVER_ADDR", "localhost:50051")
+	clientName := getenvOrDefault("GRPC_AGENT_CLIENT_NAME", hostnameOrUnknown())
+	targetClient := os.Getenv("GRPC_AGENT_TARGET_CLIENT")
+	if targetClient == "" {
+		return "", fmt.Errorf("GRPC_AGENT_TARGET_CLIENT is required for remote mode")
 	}
 
 	conn, err := grpc.NewClient(serverAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to connect to server: %v\n", err)
-		os.Exit(1)
+		return "", fmt.Errorf("failed to connect to server %s: %w", serverAddr, err)
 	}
 	defer conn.Close()
 
 	client := proto.NewAgentServiceClient(conn)
-	stream, err := client.Connect(context.Background())
+	stream, err := client.Connect(ctx)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to connect: %v\n", err)
-		os.Exit(1)
+		return "", fmt.Errorf("failed to open stream: %w", err)
 	}
 
-	err = stream.Send(&proto.AgentMessage{
+	if err := stream.Send(&proto.AgentMessage{
 		ClientName: clientName,
 		IsResponse: false,
-	})
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to send: %v\n", err)
-		os.Exit(1)
+	}); err != nil {
+		return "", fmt.Errorf("failed to register client: %w", err)
 	}
 
-	_, err = stream.Recv()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to receive: %v\n", err)
-		os.Exit(1)
+	if _, err := stream.Recv(); err != nil {
+		return "", fmt.Errorf("failed to receive registration ack: %w", err)
 	}
 
-	err = stream.Send(&proto.AgentMessage{
+	if err := stream.Send(&proto.AgentMessage{
 		ClientName: clientName,
 		TargetName: targetClient,
 		Command:    command,
 		IsResponse: false,
-	})
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to send command: %v\n", err)
-		os.Exit(1)
+	}); err != nil {
+		return "", fmt.Errorf("failed to send command: %w", err)
 	}
 
 	resp, err := stream.Recv()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to receive response: %v\n", err)
-		os.Exit(1)
+		return "", fmt.Errorf("failed to receive command response: %w", err)
 	}
 
-	fmt.Print(resp.Output)
+	return resp.Output, nil
+}
+
+func getenvOrDefault(key, fallback string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return fallback
+}
+
+func hostnameOrUnknown() string {
+	h, err := os.Hostname()
+	if err != nil {
+		return "unknown"
+	}
+	return h
+}
+
+func main() {
+	log.SetOutput(os.Stderr)
+	plugin.Serve(&plugin.ServeConfig{
+		HandshakeConfig: shared.HandshakeConfig,
+		Plugins: map[string]plugin.Plugin{
+			shared.PluginExecutor: &shared.ExecutorPlugin{Impl: &RemoteExecutor{}},
+		},
+	})
 }

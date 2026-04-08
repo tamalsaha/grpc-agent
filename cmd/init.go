@@ -8,13 +8,15 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
-	"strings"
+	"path/filepath"
 	"sync"
 
+	"github.com/hashicorp/go-plugin"
 	"github.com/spf13/cobra"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/peer"
 	"grpc-agent/proto/gen/proto"
+	"grpc-agent/shared"
 )
 
 var (
@@ -22,6 +24,8 @@ var (
 	grpcServer *grpc.Server
 	clients    = make(map[string]proto.AgentService_ConnectServer)
 	mu         sync.RWMutex
+	pendingMu  sync.RWMutex
+	pending    = make(map[string]chan *proto.AgentMessage)
 )
 
 var initCmdObj = &cobra.Command{
@@ -52,8 +56,12 @@ var initCmdObj = &cobra.Command{
 	},
 }
 
+// serverHandler is the main gRPC server that handles client connections.
+// It delegates command execution to plugins.
 type serverHandler struct {
 	proto.UnimplementedAgentServiceServer
+	pluginClient *plugin.Client
+	executor     shared.Executor
 }
 
 func (s *serverHandler) Connect(stream proto.AgentService_ConnectServer) error {
@@ -85,6 +93,11 @@ func (s *serverHandler) Connect(stream proto.AgentService_ConnectServer) error {
 			mu.Unlock()
 			log.Printf("Client registered: %s", clientName)
 
+			// Initialize the plugin client on first connection
+			if s.pluginClient == nil {
+				s.initializePluginClient()
+			}
+
 			resp := &proto.AgentMessage{
 				ClientName: clientName,
 				Command:    "",
@@ -106,7 +119,8 @@ func (s *serverHandler) Connect(stream proto.AgentService_ConnectServer) error {
 			log.Printf("Executing command on %s: %s", targetName, msg.Command)
 
 			if targetName == clientName {
-				output, err := executeCommand(msg.Command)
+				// Execute locally using the plugin
+				output, err := s.executor.Execute(stream.Context(), msg.Command)
 				resp := &proto.AgentMessage{
 					ClientName: clientName,
 					Command:    msg.Command,
@@ -135,49 +149,96 @@ func (s *serverHandler) Connect(stream proto.AgentService_ConnectServer) error {
 					}
 					stream.Send(resp)
 				} else {
+					responseCh := make(chan *proto.AgentMessage, 1)
+					pendingMu.Lock()
+					pending[clientName] = responseCh
+					pendingMu.Unlock()
+
 					forwardMsg := &proto.AgentMessage{
 						ClientName: clientName,
+						TargetName: targetName,
 						Command:    msg.Command,
 						IsResponse: false,
 					}
-					targetStream.Send(forwardMsg)
-
-					clientResp, err := targetStream.Recv()
-					if err != nil {
+					if err := targetStream.Send(forwardMsg); err != nil {
+						pendingMu.Lock()
+						delete(pending, clientName)
+						pendingMu.Unlock()
 						stream.Send(&proto.AgentMessage{
 							ClientName: clientName,
 							Command:    msg.Command,
-							Output:     fmt.Sprintf("Error receiving response: %v", err),
+							Output:     fmt.Sprintf("Error forwarding command: %v", err),
 							IsResponse: true,
 						})
-					} else {
-						resp := &proto.AgentMessage{
-							ClientName: clientName,
-							Command:    msg.Command,
-							Output:     clientResp.Output,
-							IsResponse: true,
-						}
-						stream.Send(resp)
+						continue
 					}
+
+					clientResp := <-responseCh
+					pendingMu.Lock()
+					delete(pending, clientName)
+					pendingMu.Unlock()
+
+					resp := &proto.AgentMessage{
+						ClientName: clientName,
+						Command:    msg.Command,
+						Output:     clientResp.Output,
+						IsResponse: true,
+					}
+					stream.Send(resp)
 				}
+			}
+			continue
+		}
+
+		if msg.IsResponse && msg.TargetName != "" {
+			pendingMu.RLock()
+			responseCh, ok := pending[msg.TargetName]
+			pendingMu.RUnlock()
+			if ok {
+				responseCh <- msg
 			}
 		}
 	}
 }
 
-func executeCommand(cmdStr string) (string, error) {
-	parts := strings.Fields(cmdStr)
-	if len(parts) == 0 {
-		return "", fmt.Errorf("empty command")
+// initializePluginClient sets up the plugin client and loads the executor plugin.
+func (s *serverHandler) initializePluginClient() {
+	// Get the plugin command from environment or use default
+	pluginCmd := os.Getenv("EXECUTOR_PLUGIN")
+	if pluginCmd == "" {
+		pluginCmd = resolveDefaultPluginPath()
 	}
 
-	cmd := exec.Command(parts[0], parts[1:]...)
-	cmd.Env = os.Environ()
-	output, err := cmd.CombinedOutput()
+	s.pluginClient = plugin.NewClient(&plugin.ClientConfig{
+		HandshakeConfig:  shared.HandshakeConfig,
+		Plugins:          shared.PluginMap,
+		Cmd:              exec.Command(pluginCmd),
+		AllowedProtocols: []plugin.Protocol{plugin.ProtocolNetRPC},
+	})
+
+	// Connect via RPC
+	rpcClient, err := s.pluginClient.Client()
 	if err != nil {
-		return string(output), err
+		log.Fatalf("error creating plugin client: %v", err)
 	}
-	return string(output), nil
+
+	// Request the plugin
+	raw, err := rpcClient.Dispense(shared.PluginExecutor)
+	if err != nil {
+		log.Fatalf("error dispensing plugin: %v", err)
+	}
+
+	// We should have an Executor now
+	s.executor = raw.(shared.Executor)
+	log.Println("Successfully loaded executor plugin")
+}
+
+func resolveDefaultPluginPath() string {
+	execPath, err := os.Executable()
+	if err != nil {
+		return "./plugins/local_exec_plugin/local_exec_plugin"
+	}
+	return filepath.Join(filepath.Dir(execPath), "plugins", "local_exec_plugin", "local_exec_plugin")
 }
 
 func InitCmd() *cobra.Command {
